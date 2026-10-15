@@ -77,24 +77,51 @@ def audio():
 
     if not os.path.exists(target_file):
         yt_url = f"https://www.youtube.com/watch?v={safe_id}"
-        temp_output = os.path.join(CACHE_DIR, f"{safe_id}.%(ext)s")
-        cmd = [
-            "yt-dlp",
-            "--extractor-args", "youtube:player_client=android_creator,android,mweb",
-            "-x",
-            "--audio-format", "mp3",
-            "--audio-quality", "192K",
-            "-o", temp_output,
-            yt_url,
-            "--no-warnings"
-        ]
         err_msg = ""
+        # Strategy 1: Extract direct audio stream via tv_embedded (Zero YouTube Bot Check)
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=50)
-            if res.returncode != 0:
-                err_msg = res.stderr or res.stdout
+            cmd1 = [
+                "yt-dlp",
+                "--extractor-args", "youtube:player_client=tv_embedded",
+                "-g", "-f", "140/ba/b",
+                yt_url,
+                "--no-warnings"
+            ]
+            res1 = subprocess.run(cmd1, capture_output=True, text=True, timeout=15)
+            stream_url = res1.stdout.strip()
+            if stream_url and stream_url.startswith("http"):
+                cmd_ffmpeg = [
+                    "ffmpeg", "-y",
+                    "-i", stream_url,
+                    "-vn", "-c:a", "libmp3lame",
+                    "-b:a", "192k",
+                    target_file
+                ]
+                res_ff = subprocess.run(cmd_ffmpeg, capture_output=True, text=True, timeout=45)
+                if res_ff.returncode != 0:
+                    err_msg = res_ff.stderr or "FFmpeg encoding failed"
         except Exception as e:
             err_msg = str(e)
+
+        # Strategy 2: Direct yt-dlp audio extraction fallback
+        if not os.path.exists(target_file):
+            temp_output = os.path.join(CACHE_DIR, f"{safe_id}.%(ext)s")
+            cmd2 = [
+                "yt-dlp",
+                "--extractor-args", "youtube:player_client=android_creator,android,mweb",
+                "-x",
+                "--audio-format", "mp3",
+                "--audio-quality", "192K",
+                "-o", temp_output,
+                yt_url,
+                "--no-warnings"
+            ]
+            try:
+                res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=35)
+                if res2.returncode != 0 and not err_msg:
+                    err_msg = res2.stderr
+            except Exception as e:
+                err_msg = str(e)
 
     # Check for direct target file
     if os.path.exists(target_file):
