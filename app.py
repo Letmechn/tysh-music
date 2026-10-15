@@ -62,6 +62,10 @@ def search():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route("/ping")
+def ping():
+    return "pong", 200
+
 @app.route("/audio")
 def audio():
     v_id = request.args.get("id", "").strip()
@@ -76,6 +80,7 @@ def audio():
         temp_output = os.path.join(CACHE_DIR, f"{safe_id}.%(ext)s")
         cmd = [
             "yt-dlp",
+            "--extractor-args", "youtube:player_client=tv_embedded,web",
             "-x",
             "--audio-format", "mp3",
             "--audio-quality", "192K",
@@ -83,14 +88,26 @@ def audio():
             yt_url,
             "--no-warnings"
         ]
+        err_msg = ""
         try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=35)
-        except Exception:
-            pass
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=50)
+            if res.returncode != 0:
+                err_msg = res.stderr or res.stdout
+        except Exception as e:
+            err_msg = str(e)
 
+    # Check for direct target file
     if os.path.exists(target_file):
         return send_file(target_file, mimetype="audio/mpeg")
-    return "Audio extraction failed", 404
+
+    # Check for any audio file matching safe_id
+    for f in os.listdir(CACHE_DIR):
+        if f.startswith(safe_id):
+            full_p = os.path.join(CACHE_DIR, f)
+            mime = "audio/mpeg" if f.endswith(".mp3") else "audio/mp4" if f.endswith(".m4a") else "audio/ogg"
+            return send_file(full_p, mimetype=mime)
+
+    return f"Audio extraction failed: {err_msg}", 404
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
