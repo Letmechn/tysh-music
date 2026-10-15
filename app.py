@@ -1,6 +1,7 @@
 import os
 import subprocess
 import json
+import hashlib
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
@@ -12,7 +13,15 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "online", "service": "TySh Cloud Music Engine v1.0"})
+    return jsonify({"status": "online", "service": "TySh Cloud Music Engine v2.1", "version": "bulletproof"})
+
+@app.route("/version")
+def version():
+    return "v2.1-bulletproof", 200
+
+@app.route("/ping")
+def ping():
+    return "pong", 200
 
 @app.route("/search")
 def search():
@@ -61,10 +70,6 @@ def search():
         return jsonify({"success": True, "results": tracks})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
-
-@app.route("/ping")
-def ping():
-    return "pong", 200
 
 @app.route("/audio")
 def audio():
@@ -135,6 +140,54 @@ def audio():
             return send_file(full_p, mimetype=mime)
 
     return f"Audio extraction failed: {err_msg}", 404
+
+@app.route("/convert")
+def convert():
+    q = request.args.get("q", "").strip()
+    if not q:
+        return "Query required", 400
+
+    q_hash = hashlib.md5(q.lower().encode("utf-8")).hexdigest()[:16]
+    target_file = os.path.join(CACHE_DIR, f"conv_{q_hash}.mp3")
+
+    if not os.path.exists(target_file):
+        cmd_search = [
+            "yt-dlp",
+            f"ytsearch1:{q}",
+            "--dump-json",
+            "--flat-playlist",
+            "--no-warnings"
+        ]
+        try:
+            res_s = subprocess.run(cmd_search, capture_output=True, text=True, timeout=12)
+            if res_s.stdout.strip():
+                d = json.loads(res_s.stdout.strip().split("\n")[0])
+                v_id = d.get("id")
+                if v_id:
+                    cmd_stream = [
+                        "yt-dlp",
+                        "--extractor-args", "youtube:player_client=tv_embedded",
+                        "-g", "-f", "140/ba/b",
+                        f"https://www.youtube.com/watch?v={v_id}",
+                        "--no-warnings"
+                    ]
+                    res_str = subprocess.run(cmd_stream, capture_output=True, text=True, timeout=15)
+                    stream_url = res_str.stdout.strip()
+                    if stream_url and stream_url.startswith("http"):
+                        cmd_ffmpeg = [
+                            "ffmpeg", "-y",
+                            "-i", stream_url,
+                            "-vn", "-c:a", "libmp3lame",
+                            "-b:a", "192k",
+                            target_file
+                        ]
+                        subprocess.run(cmd_ffmpeg, capture_output=True, text=True, timeout=45)
+        except Exception:
+            pass
+
+    if os.path.exists(target_file):
+        return send_file(target_file, mimetype="audio/mpeg")
+    return "Conversion failed", 404
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
