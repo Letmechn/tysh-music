@@ -2,6 +2,7 @@ import os
 import subprocess
 import json
 import hashlib
+import urllib.parse
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
@@ -61,7 +62,7 @@ def search():
                         "artist": uploader[:28],
                         "duration": int(duration),
                         "coverUrl": thumb,
-                        "audioUrl": f"{base_url}/audio?id={v_id}",
+                        "audioUrl": f"{base_url}/audio?id={v_id}&title={urllib.parse.quote(title)}",
                         "source": "Full Master Track (320k)"
                     })
             except Exception:
@@ -83,10 +84,13 @@ def audio():
     if not os.path.exists(target_file):
         yt_url = f"https://www.youtube.com/watch?v={safe_id}"
         err_msg = ""
+        cookie_args = ["--cookies", "cookies.txt"] if os.path.exists("cookies.txt") else []
+
         # Strategy 1: Extract direct audio stream via tv_embedded (Zero YouTube Bot Check)
         try:
             cmd1 = [
                 "yt-dlp",
+                *cookie_args,
                 "--extractor-args", "youtube:player_client=tv_embedded",
                 "-g", "-f", "140/ba/b",
                 yt_url,
@@ -113,6 +117,7 @@ def audio():
             temp_output = os.path.join(CACHE_DIR, f"{safe_id}.%(ext)s")
             cmd2 = [
                 "yt-dlp",
+                *cookie_args,
                 "--extractor-args", "youtube:player_client=android_creator,android,mweb",
                 "-x",
                 "--audio-format", "mp3",
@@ -127,6 +132,25 @@ def audio():
                     err_msg = res2.stderr
             except Exception as e:
                 err_msg = str(e)
+
+        # Strategy 3: SoundCloud Fallback (100% Free, Zero Bot Verification)
+        if not os.path.exists(target_file):
+            search_term = request.args.get("title", "").strip() or request.args.get("q", "").strip()
+            if search_term:
+                temp_output = os.path.join(CACHE_DIR, f"{safe_id}.%(ext)s")
+                cmd3 = [
+                    "yt-dlp",
+                    "-x",
+                    "--audio-format", "mp3",
+                    "--audio-quality", "192K",
+                    "-o", temp_output,
+                    f"scsearch1:{search_term}",
+                    "--no-warnings"
+                ]
+                try:
+                    subprocess.run(cmd3, capture_output=True, text=True, timeout=25)
+                except Exception as e:
+                    err_msg = str(e)
 
     # Check for direct target file
     if os.path.exists(target_file):
@@ -151,39 +175,60 @@ def convert():
     target_file = os.path.join(CACHE_DIR, f"conv_{q_hash}.mp3")
 
     if not os.path.exists(target_file):
-        cmd_search = [
-            "yt-dlp",
-            f"ytsearch1:{q}",
-            "--dump-json",
-            "--flat-playlist",
-            "--no-warnings"
-        ]
+        temp_output = os.path.join(CACHE_DIR, f"conv_{q_hash}.%(ext)s")
+        # Strategy 1: SoundCloud (100% Free, Zero Bot Block)
         try:
-            res_s = subprocess.run(cmd_search, capture_output=True, text=True, timeout=12)
-            if res_s.stdout.strip():
-                d = json.loads(res_s.stdout.strip().split("\n")[0])
-                v_id = d.get("id")
-                if v_id:
-                    cmd_stream = [
-                        "yt-dlp",
-                        "--extractor-args", "youtube:player_client=tv_embedded",
-                        "-g", "-f", "140/ba/b",
-                        f"https://www.youtube.com/watch?v={v_id}",
-                        "--no-warnings"
-                    ]
-                    res_str = subprocess.run(cmd_stream, capture_output=True, text=True, timeout=15)
-                    stream_url = res_str.stdout.strip()
-                    if stream_url and stream_url.startswith("http"):
-                        cmd_ffmpeg = [
-                            "ffmpeg", "-y",
-                            "-i", stream_url,
-                            "-vn", "-c:a", "libmp3lame",
-                            "-b:a", "192k",
-                            target_file
-                        ]
-                        subprocess.run(cmd_ffmpeg, capture_output=True, text=True, timeout=45)
+            cmd_sc = [
+                "yt-dlp",
+                "-x",
+                "--audio-format", "mp3",
+                "--audio-quality", "192K",
+                "-o", temp_output,
+                f"scsearch1:{q}",
+                "--no-warnings"
+            ]
+            res_sc = subprocess.run(cmd_sc, capture_output=True, text=True, timeout=25)
         except Exception:
             pass
+
+        # Strategy 2: YouTube Fallback with cookies
+        if not os.path.exists(target_file):
+            cookie_args = ["--cookies", "cookies.txt"] if os.path.exists("cookies.txt") else []
+            cmd_search = [
+                "yt-dlp",
+                *cookie_args,
+                f"ytsearch1:{q}",
+                "--dump-json",
+                "--flat-playlist",
+                "--no-warnings"
+            ]
+            try:
+                res_s = subprocess.run(cmd_search, capture_output=True, text=True, timeout=12)
+                if res_s.stdout.strip():
+                    d = json.loads(res_s.stdout.strip().split("\n")[0])
+                    v_id = d.get("id")
+                    if v_id:
+                        cmd_stream = [
+                            "yt-dlp",
+                            *cookie_args,
+                            "--extractor-args", "youtube:player_client=tv_embedded",
+                            "-g", "-f", "140/ba/b",
+                            f"https://www.youtube.com/watch?v={v_id}",
+                            "--no-warnings"
+                        ]
+                        res_str = subprocess.run(cmd_stream, capture_output=True, text=True, timeout=15)
+                        stream_url = res_str.stdout.strip()
+                        if stream_url and stream_url.startswith("http"):
+                            cmd_ffmpeg = [
+                                "ffmpeg", "-y",
+                                "-i", stream_url,
+                                "-vn", "-c:a", "libmp3lame",
+                                "-b:a", "192k",
+                                target_file
+                            ]
+                            subprocess.run(cmd_ffmpeg, capture_output=True, text=True, timeout=45)
+            except Exception:
+                pass
 
     if os.path.exists(target_file):
         return send_file(target_file, mimetype="audio/mpeg")
