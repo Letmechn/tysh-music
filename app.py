@@ -80,7 +80,7 @@ def audio():
         temp_output = os.path.join(CACHE_DIR, f"{safe_id}.%(ext)s")
         cmd = [
             "yt-dlp",
-            "--extractor-args", "youtube:player_client=tv_embedded,web",
+            "--extractor-args", "youtube:player_client=android_creator,android,mweb",
             "-x",
             "--audio-format", "mp3",
             "--audio-quality", "192K",
